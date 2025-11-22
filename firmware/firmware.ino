@@ -1,7 +1,8 @@
 #include <avr/delay.h>
 #include <avr/interrupt.h>
 
-// Mx follow the silkscreen notation of the board
+#define F_CPU 1000000UL   // 1 MHz CPU
+
 #define M1_PIN    2
 #define M2_PIN    1
 #define M3_PIN    0
@@ -92,7 +93,7 @@ void iterate_row(uint8_t row_idx) {
   }
 }
 
-void turn_on_all() {
+void commit_lights() {
   pin_write(M1_PIN, HIGH);
   pin_write(M2_PIN, LOW);
   pin_write(M3_PIN, LOW);
@@ -115,28 +116,50 @@ void turn_on_all() {
   if (interrupt) return;
 }
 
-ISR(PCINT0_vect) {
+// ISR(PCINT0_vect) {
+//   btn_down = !btn_down;
+//   interrupt = true;
+// }
+
+
+ISR(TIM0_COMPA_vect) {
   btn_down = !btn_down;
   interrupt = true;
 }
 
 int main() {
   cli();
+
   DDRB &= ~(1 << BTN_PIN);    // Set pin to input
   PORTB |= (1 << BTN_PIN);    // Set pin to high to enable pull-up resistor
   GIMSK |= (1 << PCIE);       // Enable Pin Change Interrupts
   PCMSK |= (1 << PCINT4);     // Enable Pin Change Interrupts on PB4
+
+  TCCR0A = 1 << WGM01;                // Clear timer when TIMSK reaches the value in OCR0A
+  TCCR0B = (1 << CS02) | (1 << CS00); // Set prescaler 1024 => 1 timer finish every 1.024 ms
+  TCNT0 = 0;                          // Reset the timer counter
+  TIMSK = 1 << OCIE0A;                // Enable timer comparison with OCR0A
+  OCR0A = 96;                         // 97 cycles, trigger interrupt every 99.328 ms
+
   sei();
 
+  // TODO: add game mode when button is down before boot, change timer interrupt to trigger every 1 ms
+
+  for (uint8_t i = 1; i <= 4; i++) {
+    pin_mode(get_pin(i), OUTPUT);
+  }
+
   while (true) {
-    if (btn_down) {
-      for (uint8_t i = 1; i <= 4; i++) {
-        pin_mode(get_pin(i), OUTPUT);
-      }
-      turn_on_all();
+    if (!btn_down) {
+      // for (uint8_t i = 1; i <= 4; i++) {
+      //   pin_mode(get_pin(i), OUTPUT);
+      // }
+      // commit_lights();
+      pin_write(M1_PIN, HIGH);
     } else {
-      iterate_row(row);
-      row = (row + 1) & 3;
+      pin_write(M1_PIN, LOW);
+      // iterate_row(row);
+      // row = (row + 1) & 3;
     }
 
     interrupt = false;  // Always reset interrupt flag
