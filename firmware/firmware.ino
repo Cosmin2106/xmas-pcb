@@ -1,7 +1,7 @@
 #include <avr/delay.h>
 #include <avr/interrupt.h>
 
-#define F_CPU 1000000UL   // 1 MHz CPU
+#define F_CPU 8000000UL   // 1 MHz CPU
 
 #define M1_PIN    2
 #define M2_PIN    1
@@ -10,10 +10,11 @@
 #define BTN_PIN   4
 
 
-bool interrupt = false;
-bool btn_down = false;
-uint8_t row = 0;
-uint8_t row_x_indices[4][4] = {
+bool INTERRUPT = false;
+bool BTN_DOWN = false;
+uint16_t LIGHTS_STATE = 0;  // The 4 left-most bits are 0. The 12th represents the state of D12, whereas the 1st, the state of D1.
+uint8_t ROW = 0;
+uint8_t ROW_X_INDICES[4][4] = {
   {1, 2, 3, 4},
   {2, 1, 3, 4},
   {3, 1, 2, 4},
@@ -25,15 +26,15 @@ uint8_t row_x_indices[4][4] = {
 bool interrupted_delay(uint32_t millis) {
   while (millis-- > 0) {
     _delay_ms(1);
-    if (interrupt) {
+    if (INTERRUPT) {
       return true;
     }
   }
   return false;
 }
 
-void pin_mode(uint8_t pin, uint8_t mode) {
-  cli();
+inline void pin_mode(uint8_t pin, uint8_t mode, bool batch_mode = false) {
+  if (!batch_mode) cli();
   switch (mode) {
     case INPUT:
       DDRB &= ~(1 << pin);
@@ -42,23 +43,23 @@ void pin_mode(uint8_t pin, uint8_t mode) {
       DDRB |= (1 << pin);
       break;
   }
-  sei();
+  if (!batch_mode) sei();
 }
 
-void pin_write(uint8_t pin, uint8_t val) {
-  cli();
+inline void pin_write(uint8_t pin, uint8_t val, bool batch_mode = false) {
+  if (!batch_mode) cli();
   if (val == LOW) {
     PORTB &= ~(1 << pin);
   } else if (val == HIGH) {
     PORTB |= (1 << pin);
   }
-  sei();
+  if (!batch_mode) sei();
 }
 
 // --- Utils ---
 
 
-uint8_t get_pin(uint8_t mx) {
+inline uint8_t get_pin(uint8_t mx) {
   switch (mx) {
     case 1:
       return M1_PIN;
@@ -68,6 +69,8 @@ uint8_t get_pin(uint8_t mx) {
       return M3_PIN;
     case 4:
       return M4_PIN;
+    default:
+      return M1_PIN;
   }
 }
 
@@ -77,43 +80,68 @@ void iterate_row(uint8_t row_idx) {
   pin_write(high_pin, HIGH);
 
   for (uint8_t i = 0; i < 4; i++) {
-    if (get_pin(row_x_indices[row_idx][i]) == high_pin) {
+    if (get_pin(ROW_X_INDICES[row_idx][i]) == high_pin) {
       continue;
     }
-    pin_mode(get_pin(row_x_indices[row_idx][i]), OUTPUT);
-    pin_write(get_pin(row_x_indices[row_idx][i]), LOW);
+    pin_mode(get_pin(ROW_X_INDICES[row_idx][i]), OUTPUT);
+    pin_write(get_pin(ROW_X_INDICES[row_idx][i]), LOW);
 
     for (uint8_t j = 0; j < 4; j++) {
-      if (get_pin(row_x_indices[row_idx][j]) == get_pin(row_x_indices[row_idx][i]) || get_pin(row_x_indices[row_idx][j]) == high_pin) {
+      if (get_pin(ROW_X_INDICES[row_idx][j]) == get_pin(ROW_X_INDICES[row_idx][i]) || get_pin(ROW_X_INDICES[row_idx][j]) == high_pin) {
         continue;
       }
-      pin_mode(get_pin(row_x_indices[row_idx][j]), INPUT);
+      pin_mode(get_pin(ROW_X_INDICES[row_idx][j]), INPUT);
     }
     if (interrupted_delay(100)) return;
   }
 }
 
-void commit_lights() {
-  pin_write(M1_PIN, HIGH);
-  pin_write(M2_PIN, LOW);
-  pin_write(M3_PIN, LOW);
-  pin_write(M4_PIN, LOW);
+void turn_on_row(uint8_t row_idx) {
+  cli();
+  pin_write(M1_PIN, LOW, true);
+  pin_write(M2_PIN, LOW, true);
+  pin_write(M3_PIN, LOW, true);
+  pin_write(M4_PIN, LOW, true);
+  pin_write(get_pin(row_idx), HIGH, true);
+  sei();
+}
 
-  pin_write(M1_PIN, LOW);
-  pin_write(M2_PIN, HIGH);
-  pin_write(M3_PIN, LOW);
-  pin_write(M4_PIN, LOW);
+void clear_all() {
+  for (uint8_t i = 1; i <= 4; i++) {
+    pin_mode(get_pin(i), INPUT);
+    pin_write(get_pin(i), LOW);
+  }
+}
 
-  pin_write(M1_PIN, LOW);
-  pin_write(M2_PIN, LOW);
-  pin_write(M3_PIN, HIGH);
-  pin_write(M4_PIN, LOW);
+// This method is to be used only if the total number
+// of ON LEDs is at most 3
+void commit_three(uint16_t* state_ptr) {
+  uint16_t lights_state_tmp = *state_ptr;
+  // TODO
+}
 
-  pin_write(M1_PIN, LOW);
-  pin_write(M2_PIN, LOW);
-  pin_write(M3_PIN, LOW);
-  pin_write(M4_PIN, HIGH);
-  if (interrupt) return;
+// This multiplexing approach should only be used in case 
+// we wish to light up more than 3 LEDs at a time
+void commit_all(uint16_t* state_ptr) {
+  uint16_t lights_state_tmp = *state_ptr;
+  uint8_t column_on = 0;
+  while (true) {
+    for (uint8_t high_pin = 1; high_pin <= 4; high_pin++) {
+      clear_all();
+      for (uint8_t low_pin = 1; low_pin <= 4; low_pin++) {
+        if (high_pin == low_pin) continue;
+        column_on |= (lights_state_tmp & 0x1);
+        pin_mode(get_pin(low_pin), lights_state_tmp & 0x1);
+        pin_write(get_pin(low_pin), ~(lights_state_tmp & 0x1));
+        lights_state_tmp >>= 1;
+      }
+      pin_mode(get_pin(high_pin), column_on);
+      pin_write(get_pin(high_pin), column_on);
+      column_on = 0;
+    }
+    if (INTERRUPT) return;
+    lights_state_tmp = *state_ptr;
+  }
 }
 
 // ISR(PCINT0_vect) {
@@ -121,10 +149,12 @@ void commit_lights() {
 //   interrupt = true;
 // }
 
-
+uint8_t cnt = 0;
 ISR(TIM0_COMPA_vect) {
-  btn_down = !btn_down;
-  interrupt = true;
+  if (++cnt < 10) return;
+  cnt = 0;
+  BTN_DOWN = !BTN_DOWN;
+  INTERRUPT = true;
 }
 
 int main() {
@@ -145,24 +175,16 @@ int main() {
 
   // TODO: add game mode when button is down before boot, change timer interrupt to trigger every 1 ms
 
-  for (uint8_t i = 1; i <= 4; i++) {
-    pin_mode(get_pin(i), OUTPUT);
-  }
+  LIGHTS_STATE = 2735;
 
   while (true) {
-    if (!btn_down) {
-      // for (uint8_t i = 1; i <= 4; i++) {
-      //   pin_mode(get_pin(i), OUTPUT);
-      // }
-      // commit_lights();
-      pin_write(M1_PIN, HIGH);
+    if (!BTN_DOWN) {
+      commit_all(&LIGHTS_STATE);
     } else {
-      pin_write(M1_PIN, LOW);
-      // iterate_row(row);
-      // row = (row + 1) & 3;
+      clear_all();
     }
 
-    interrupt = false;  // Always reset interrupt flag
+    INTERRUPT = false;  // Always reset interrupt flag
   }
   return 0;
 }
