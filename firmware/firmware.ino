@@ -9,7 +9,14 @@
 #define M4_PIN    3
 #define BTN_PIN   4
 
-bool INTERRUPT = false;
+#define I_TIMER   0
+#define I_BTN     1
+
+uint8_t INTERRUPTS = 0;       // No interrupt is triggered by default
+
+uint8_t INTERRUPT_MASK = 0;   // No interrupt is enabled by default
+
+bool LED_SHOW_TOGGLE = false;
 
 bool BTN_DOWN = false;
 
@@ -53,7 +60,8 @@ inline void turn_on_led(uint8_t led) {
 void commit_leds(uint16_t* state_ptr) {
   uint16_t lights_state = *state_ptr;
   
-  while (!INTERRUPT) {
+  // Listen to all active interrupts
+  while (!(INTERRUPTS & INTERRUPT_MASK)) {
     for (uint8_t led = 0; led < 12; led++) {
       if (lights_state & (1 << led)) {
         turn_on_led(led);
@@ -63,12 +71,17 @@ void commit_leds(uint16_t* state_ptr) {
   }
 }
 
+ISR(PCINT0_vect) {
+  BTN_DOWN = !BTN_DOWN;
+  INTERRUPTS |= 1 << I_BTN;
+}
+
 uint8_t cnt = 0;
 ISR(TIM0_COMPA_vect) {
   if (++cnt < 10) return;
   cnt = 0;
-  BTN_DOWN = !BTN_DOWN;
-  INTERRUPT = true;
+  LED_SHOW_TOGGLE = !LED_SHOW_TOGGLE;
+  INTERRUPTS |= 1 << I_TIMER;
 }
 
 int main() {
@@ -85,14 +98,34 @@ int main() {
   OCR0A = 96;                         // 97 cycles, trigger interrupt every 99.328 ms
   sei();
 
-  while (true) {
-    if (!BTN_DOWN) {
-      LED_PATTERN = 1885;
-    } else {
-      LED_PATTERN = 2210;
+  // Check if button is pressed on boot
+  if (PINB & (1 << PINB4)) {
+    // In normal mode, enable both interrupts
+    INTERRUPT_MASK = (1 << I_TIMER) | (1 << I_BTN);
+
+    while (true) {
+      if (!LED_SHOW_TOGGLE) {
+        LED_PATTERN = 1885;
+      } else {
+        LED_PATTERN = 2210;
+      }
+      commit_leds(&LED_PATTERN);
+      INTERRUPTS = 0;
     }
-    commit_leds(&LED_PATTERN);
-    INTERRUPT = false;  // Always reset interrupt flag
+  } else {
+    // In secret mode, disable the timer interrupt
+    INTERRUPT_MASK = 1 << I_BTN;
+
+    while (true) {
+      // TODO: add cooldown after button press to avoid unwanted clicks
+      if (!BTN_DOWN) {
+        LED_PATTERN = 4095;
+      } else {
+        LED_PATTERN = 240;
+      }
+      commit_leds(&LED_PATTERN);
+      INTERRUPTS = 0;
+    }
   }
 
   return 0;
