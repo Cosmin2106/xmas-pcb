@@ -21,29 +21,30 @@ struct led_config {
 };
 
 const struct led_config LED_CONFIGS[12] = {
-  {M2_PIN, M1_PIN, (1<<M2_PIN) | (1<<M1_PIN), (1<<M2_PIN)},   // D1:  M2 -> M1
-  {M3_PIN, M1_PIN, (1<<M3_PIN) | (1<<M1_PIN), (1<<M3_PIN)},   // D2:  M3 -> M1
-  {M4_PIN, M1_PIN, (1<<M4_PIN) | (1<<M1_PIN), (1<<M4_PIN)},   // D3:  M4 -> M1
-  {M1_PIN, M2_PIN, (1<<M1_PIN) | (1<<M2_PIN), (1<<M1_PIN)},   // D4:  M1 -> M2
-  {M3_PIN, M2_PIN, (1<<M3_PIN) | (1<<M2_PIN), (1<<M3_PIN)},   // D5:  M3 -> M2
-  {M4_PIN, M2_PIN, (1<<M4_PIN) | (1<<M2_PIN), (1<<M4_PIN)},   // D6:  M4 -> M2
-  {M1_PIN, M3_PIN, (1<<M1_PIN) | (1<<M3_PIN), (1<<M1_PIN)},   // D7:  M1 -> M3
-  {M2_PIN, M3_PIN, (1<<M2_PIN) | (1<<M3_PIN), (1<<M2_PIN)},   // D8:  M2 -> M3
-  {M4_PIN, M3_PIN, (1<<M4_PIN) | (1<<M3_PIN), (1<<M4_PIN)},   // D9:  M4 -> M3
-  {M1_PIN, M4_PIN, (1<<M1_PIN) | (1<<M4_PIN), (1<<M1_PIN)},   // D10: M1 -> M4
-  {M2_PIN, M4_PIN, (1<<M2_PIN) | (1<<M4_PIN), (1<<M2_PIN)},   // D11: M2 -> M4
-  {M3_PIN, M4_PIN, (1<<M3_PIN) | (1<<M4_PIN), (1<<M3_PIN)}    // D12: M3 -> M4
+  {M2_PIN, M1_PIN, (1 << M2_PIN) | (1 << M1_PIN), (1 << M2_PIN)},   // D1:  M2 -> M1
+  {M3_PIN, M1_PIN, (1 << M3_PIN) | (1 << M1_PIN), (1 << M3_PIN)},   // D2:  M3 -> M1
+  {M4_PIN, M1_PIN, (1 << M4_PIN) | (1 << M1_PIN), (1 << M4_PIN)},   // D3:  M4 -> M1
+  {M1_PIN, M2_PIN, (1 << M1_PIN) | (1 << M2_PIN), (1 << M1_PIN)},   // D4:  M1 -> M2
+  {M3_PIN, M2_PIN, (1 << M3_PIN) | (1 << M2_PIN), (1 << M3_PIN)},   // D5:  M3 -> M2
+  {M4_PIN, M2_PIN, (1 << M4_PIN) | (1 << M2_PIN), (1 << M4_PIN)},   // D6:  M4 -> M2
+  {M1_PIN, M3_PIN, (1 << M1_PIN) | (1 << M3_PIN), (1 << M1_PIN)},   // D7:  M1 -> M3
+  {M2_PIN, M3_PIN, (1 << M2_PIN) | (1 << M3_PIN), (1 << M2_PIN)},   // D8:  M2 -> M3
+  {M4_PIN, M3_PIN, (1 << M4_PIN) | (1 << M3_PIN), (1 << M4_PIN)},   // D9:  M4 -> M3
+  {M1_PIN, M4_PIN, (1 << M1_PIN) | (1 << M4_PIN), (1 << M1_PIN)},   // D10: M1 -> M4
+  {M2_PIN, M4_PIN, (1 << M2_PIN) | (1 << M4_PIN), (1 << M2_PIN)},   // D11: M2 -> M4
+  {M3_PIN, M4_PIN, (1 << M3_PIN) | (1 << M4_PIN), (1 << M3_PIN)}    // D12: M3 -> M4
 };
 
 uint16_t LED_PATTERN = 0;
 
 
 inline void clear_leds() {
-  DDRB &= ~((1<<M1_PIN) | (1<<M2_PIN) | (1<<M3_PIN) | (1<<M4_PIN));
-  PORTB &= ~((1<<M1_PIN) | (1<<M2_PIN) | (1<<M3_PIN) | (1<<M4_PIN));
+  // Assume LEDs are wired to physical pins PB0 -> PB3
+  DDRB &= ~0x0f;
+  PORTB &= ~0x0f;
 }
 
-inline void set_led_state(uint8_t led) {
+inline void turn_on_led(uint8_t led) {
   clear_leds();
   DDRB |= LED_CONFIGS[led].pin_mask_out;
   PORTB |= LED_CONFIGS[led].port_mask_high;
@@ -55,8 +56,8 @@ void commit_leds(uint16_t* state_ptr) {
   while (!INTERRUPT) {
     for (uint8_t led = 0; led < 12; led++) {
       if (lights_state & (1 << led)) {
-        set_led_state(led);
-        _delay_us(15);  // Give LEDs enough time to light up
+        turn_on_led(led);
+        _delay_us(10);  // Give LEDs enough time to light up
       }
     }
   }
