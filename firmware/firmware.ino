@@ -3,9 +3,9 @@
 
 #define F_CPU 1000000UL   // 1 MHz CPU
 
-#define M1_PIN    2
+#define M1_PIN    0
 #define M2_PIN    1
-#define M3_PIN    0
+#define M3_PIN    2
 #define M4_PIN    3
 #define BTN_PIN   4
 
@@ -16,7 +16,7 @@ uint8_t INTERRUPTS = 0;       // No interrupt is triggered by default
 
 uint8_t INTERRUPT_MASK = 0;   // No interrupt is enabled by default
 
-bool LED_SHOW_TOGGLE = false;
+uint8_t LED_SHOW_IDX = 0;
 
 bool BTN_DOWN = false;
 
@@ -44,6 +44,25 @@ const struct led_config LED_CONFIGS[12] = {
 
 uint16_t LED_PATTERN = 0;
 
+uint8_t LAST_LED_PATTERN = 0;
+
+uint8_t LED_COUNT = 0;
+
+uint8_t LEDS[12];
+
+inline void set_led_pattern(uint16_t pattern) {
+  if (LAST_LED_PATTERN == pattern) return;
+  LAST_LED_PATTERN = LED_PATTERN;
+  LED_PATTERN = pattern;
+
+  LED_COUNT = 0;
+  for (uint8_t led = 0; led < 12; led++) {
+    if (pattern & 0x1) {
+      LEDS[LED_COUNT++] = led;
+    }
+    pattern >>= 1;
+  }
+}
 
 inline void clear_leds() {
   // Assume LEDs are wired to physical pins PB0 -> PB3
@@ -57,22 +76,21 @@ inline void turn_on_led(uint8_t led) {
   PORTB |= LED_CONFIGS[led].port_mask_high;
 }
 
-void commit_leds(uint16_t* state_ptr) {
-  uint16_t lights_state = *state_ptr;
-  
+void commit_leds() {
   // Listen to all active interrupts
   while (!(INTERRUPTS & INTERRUPT_MASK)) {
-    for (uint8_t led = 0; led < 12; led++) {
-      if (lights_state & (1 << led)) {
-        turn_on_led(led);
-        _delay_us(10);  // Give LEDs enough time to light up
-      }
+    for (uint8_t led_idx = 0; led_idx < LED_COUNT; led_idx++) {
+      turn_on_led(LEDS[led_idx]);
+      _delay_us(10);  // Give LEDs enough time to light up
     }
   }
 }
 
 ISR(PCINT0_vect) {
   BTN_DOWN = !BTN_DOWN;
+  if (!BTN_DOWN) {
+    LED_SHOW_IDX = (LED_SHOW_IDX + 1) % 6;
+  }
   INTERRUPTS |= 1 << I_BTN;
 }
 
@@ -80,7 +98,6 @@ uint8_t cnt = 0;
 ISR(TIM0_COMPA_vect) {
   if (++cnt < 10) return;
   cnt = 0;
-  LED_SHOW_TOGGLE = !LED_SHOW_TOGGLE;
   INTERRUPTS |= 1 << I_TIMER;
 }
 
@@ -104,12 +121,20 @@ int main() {
     INTERRUPT_MASK = (1 << I_TIMER) | (1 << I_BTN);
 
     while (true) {
-      if (!LED_SHOW_TOGGLE) {
-        LED_PATTERN = 1885;
-      } else {
-        LED_PATTERN = 2210;
+      if (LED_SHOW_IDX == 0) {
+        set_led_pattern(3);
+      } else if (LED_SHOW_IDX == 1) {
+        set_led_pattern(15);
+      } else if (LED_SHOW_IDX == 2) {
+        set_led_pattern(63);
+      } else if (LED_SHOW_IDX == 3) {
+        set_led_pattern(255);
+      } else if (LED_SHOW_IDX == 4) {
+        set_led_pattern(1023);
+      } else if (LED_SHOW_IDX == 5) {
+        set_led_pattern(4095);
       }
-      commit_leds(&LED_PATTERN);
+      commit_leds();
       INTERRUPTS = 0;
     }
   } else {
@@ -119,11 +144,11 @@ int main() {
     while (true) {
       // TODO: add cooldown after button press to avoid unwanted clicks
       if (!BTN_DOWN) {
-        LED_PATTERN = 4095;
+        set_led_pattern(4095);
       } else {
-        LED_PATTERN = 240;
+        set_led_pattern(240);
       }
-      commit_leds(&LED_PATTERN);
+      commit_leds();
       INTERRUPTS = 0;
     }
   }
