@@ -12,19 +12,17 @@
 #define I_TIMER   0
 #define I_BTN     1
 
-uint8_t INTERRUPTS = 0;       // No interrupt is triggered by default
-
-uint8_t INTERRUPT_MASK = 0;   // No interrupt is enabled by default
-
-uint8_t LED_SHOW_IDX = 0;
-
-bool BTN_DOWN = false;
-
 struct led_config {
   uint8_t vcc_pin;
   uint8_t gnd_pin;
   uint8_t pin_mask_out;
   uint8_t port_mask_high;
+};
+
+struct led_show {
+  uint16_t led_patterns[10];
+  uint8_t i_breaks[10];
+  uint8_t length;
 };
 
 const struct led_config LED_CONFIGS[12] = {
@@ -42,6 +40,16 @@ const struct led_config LED_CONFIGS[12] = {
   {M3_PIN, M4_PIN, (1 << M3_PIN) | (1 << M4_PIN), (1 << M3_PIN)}    // D12: M3 -> M4
 };
 
+uint8_t INTERRUPTS = 0;       // No interrupt is triggered by default
+
+uint8_t INTERRUPT_MASK = 0;   // No interrupt is enabled by default
+
+uint16_t TIMER_INTERRUPT_CNT = 0;
+
+uint8_t LED_SHOW_IDX = 0;
+
+bool BTN_DOWN = false;
+
 uint16_t LED_PATTERN = 0;
 
 uint8_t LAST_LED_PATTERN = 0;
@@ -50,7 +58,29 @@ uint8_t LED_COUNT = 0;
 
 uint8_t LEDS[12];
 
-inline void set_led_pattern(uint16_t pattern) {
+inline void turn_on_led(uint8_t led) {
+  clear_leds();
+  DDRB |= LED_CONFIGS[led].pin_mask_out;
+  PORTB |= LED_CONFIGS[led].port_mask_high;
+}
+
+inline void clear_leds() {
+  // Assume LEDs are wired to physical pins PB0 -> PB3
+  DDRB &= ~0x0f;
+  PORTB &= ~0x0f;
+}
+
+void commit_leds() {
+  // Listen to all active interrupts
+  while (!(INTERRUPTS & INTERRUPT_MASK)) {
+    for (uint8_t led_idx = 0; led_idx < LED_COUNT; led_idx++) {
+      turn_on_led(LEDS[led_idx]);
+      _delay_us(10);  // Give LEDs enough time to light up
+    }
+  }
+}
+
+void set_led_pattern(uint16_t pattern) {
   if (LAST_LED_PATTERN == pattern) return;
   LAST_LED_PATTERN = LED_PATTERN;
   LED_PATTERN = pattern;
@@ -64,40 +94,28 @@ inline void set_led_pattern(uint16_t pattern) {
   }
 }
 
-inline void clear_leds() {
-  // Assume LEDs are wired to physical pins PB0 -> PB3
-  DDRB &= ~0x0f;
-  PORTB &= ~0x0f;
-}
-
-inline void turn_on_led(uint8_t led) {
-  clear_leds();
-  DDRB |= LED_CONFIGS[led].pin_mask_out;
-  PORTB |= LED_CONFIGS[led].port_mask_high;
-}
-
-void commit_leds() {
-  // Listen to all active interrupts
-  while (!(INTERRUPTS & INTERRUPT_MASK)) {
-    for (uint8_t led_idx = 0; led_idx < LED_COUNT; led_idx++) {
-      turn_on_led(LEDS[led_idx]);
-      _delay_us(10);  // Give LEDs enough time to light up
+void set_led_show(struct led_show* show) {
+  uint16_t curr_int_cnt = TIMER_INTERRUPT_CNT % show->i_breaks[show->length - 1];
+  for (uint8_t i = 0; i < show->length; i++) {
+    if (curr_int_cnt < show->i_breaks[i]) {
+      set_led_pattern(show->led_patterns[i]);
+      return;
     }
   }
+  // If LED shows are correctly set, we should never end up here
+  set_led_pattern(show->led_patterns[show->length - 1]);
 }
 
 ISR(PCINT0_vect) {
   BTN_DOWN = !BTN_DOWN;
   if (!BTN_DOWN) {
-    LED_SHOW_IDX = (LED_SHOW_IDX + 1) % 6;
+    LED_SHOW_IDX = (LED_SHOW_IDX + 1) % 1;
   }
   INTERRUPTS |= 1 << I_BTN;
 }
 
-uint8_t cnt = 0;
 ISR(TIM0_COMPA_vect) {
-  if (++cnt < 10) return;
-  cnt = 0;
+  TIMER_INTERRUPT_CNT = (TIMER_INTERRUPT_CNT + 1) % 0xffff;
   INTERRUPTS |= 1 << I_TIMER;
 }
 
@@ -115,6 +133,11 @@ int main() {
   OCR0A = 96;                         // 97 cycles, trigger interrupt every 99.328 ms
   sei();
 
+  const struct led_show led_shows[1] = {
+    {{0x555, 0xaaa, 0x555, 0xaaa, 0x555, 0xaaa}, {2, 4, 6, 8, 10, 12}, 6},
+    // {{0x555, 0xaaa, 0x555, 0xaaa, 0x555, 0xaaa}, {4, 8, 12, 16, 18, 20}, 6}
+  };
+
   // Check if button is pressed on boot
   if (PINB & (1 << PINB4)) {
     // In normal mode, enable both interrupts
@@ -122,18 +145,11 @@ int main() {
 
     while (true) {
       if (LED_SHOW_IDX == 0) {
-        set_led_pattern(3);
-      } else if (LED_SHOW_IDX == 1) {
-        set_led_pattern(15);
-      } else if (LED_SHOW_IDX == 2) {
-        set_led_pattern(63);
-      } else if (LED_SHOW_IDX == 3) {
-        set_led_pattern(255);
-      } else if (LED_SHOW_IDX == 4) {
-        set_led_pattern(1023);
-      } else if (LED_SHOW_IDX == 5) {
-        set_led_pattern(4095);
+        set_led_show(&led_shows[0]);
       }
+      // else if (LED_SHOW_IDX == 1) {
+      //   set_led_show(&led_shows[1]);
+      // }
       commit_leds();
       INTERRUPTS = 0;
     }
