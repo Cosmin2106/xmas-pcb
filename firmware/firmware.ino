@@ -6,7 +6,7 @@
 #define F_CPU             1000000UL   // 1 MHz CPU
 
 #define EEPROM_FLAG_ADDR  0
-#define EEPROM_SEED_ADDR  127
+#define EEPROM_RAND_ADDR  126
 
 #define M1_PIN            0
 #define M2_PIN            1
@@ -142,17 +142,12 @@ void game_blink_pattern(uint16_t pattern, uint8_t cycles) {
 }
 
 uint16_t next_rand_led() {
-  uint8_t eeprom_seed = eeprom_read_byte((uint8_t*) EEPROM_SEED_ADDR);
-  uint32_t x = eeprom_seed;
-
-  // Algorithm "xor" from p. 4 of Marsaglia, "Xorshift RNGs"
-  // TODO: algorithm does NOT choose all leds, change
-	x ^= x << 13;
-	x ^= x >> 17;
-	x ^= x << 5;
-
-  eeprom_write_byte((uint8_t*) EEPROM_SEED_ADDR, ++eeprom_seed);
-  return x % 12 != 5 ? (uint16_t) (x % 12) : 6;
+  uint16_t state = eeprom_read_word((uint16_t*) EEPROM_RAND_ADDR);
+  // Linear congruential generator as PRNG
+	state = (state * 28165 + 1133) & 0xffff;
+  eeprom_write_word((uint16_t*) EEPROM_RAND_ADDR, state);
+  uint16_t res = state % 12;
+  return res != 5 && res != 11 ? res % 12 : res % 12 - 1;
 }
 
 ISR(PCINT0_vect) {
