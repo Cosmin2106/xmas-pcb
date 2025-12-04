@@ -24,7 +24,7 @@
 //  - Total number of interrupts of the sequence, used to determine which LED pattern to select.
 //  - Total number of individual LED pattern in the sequence.
 struct led_show {
-  uint16_t patterns_and_breaks[17];
+  uint16_t patterns_and_breaks[24];
   uint16_t breaks_total;
   uint8_t pattern_length;
 };
@@ -65,7 +65,7 @@ volatile uint8_t LED_COUNT = 0;
 
 uint8_t LEDS[12];
 
-const uint8_t LED_SHOW_COUNT = 7;
+const uint8_t LED_SHOW_COUNT = 8;
 
 const struct led_show LED_SHOWS[LED_SHOW_COUNT] PROGMEM = {
   {{0x7df1}, 1, 1},   // Add a secret mode here if you want to reward the player for getting at least 10 points
@@ -74,6 +74,7 @@ const struct led_show LED_SHOWS[LED_SHOW_COUNT] PROGMEM = {
   {{0xd55f, 0x2aaf, 0xd55f, 0x2aaf, 0xd552, 0x2aa2, 0xd552, 0x2aa2, 0xd552, 0x2aa2, 0xd552, 0x2aa2}, 76, 12},
   {{0xd551, 0x0001, 0xd551, 0x0001, 0xd551, 0x0001, 0xd551, 0x0004, 0x2aa1, 0x0001, 0x2aa1, 0x0001, 0x2aa1, 0x0001, 0x2aa1, 0x0004}, 22, 16},
   {{0x4001, 0x0801, 0x0081, 0x0101, 0x1001, 0x0041, 0x0201, 0x0011, 0x2001, 0x0021, 0x8001, 0x0401}, 12, 12},
+  {{0x4001, 0x4801, 0x4881, 0x4981, 0x5981, 0x59c1, 0x5bc1, 0x5bd1, 0x7bd1, 0x7bf1, 0xfbf1, 0xfff8, 0xf7f1, 0xf7d1, 0xf751, 0xb751, 0xb351, 0x3351, 0x3341, 0x2341, 0x0341, 0x0141, 0x0101, 0x0008}, 38, 24},
   {{0xfff1}, 1, 1}
 };
 
