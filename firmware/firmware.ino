@@ -1,17 +1,21 @@
+#include <avr/eeprom.h>
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
 #include <util/delay.h>
 
-#define F_CPU 1000000UL   // 1 MHz CPU
+#define F_CPU             1000000UL   // 1 MHz CPU
 
-#define M1_PIN    0
-#define M2_PIN    1
-#define M3_PIN    2
-#define M4_PIN    3
-#define BTN_PIN   4
+#define EEPROM_FLAG_ADDR  0
+#define EEPROM_SEED_ADDR  127
 
-#define I_TIMER   0
-#define I_BTN     1
+#define M1_PIN            0
+#define M2_PIN            1
+#define M3_PIN            2
+#define M4_PIN            3
+#define BTN_PIN           4
+
+#define I_TIMER           0
+#define I_BTN             1
 
 
 // LED shows are constructed as follows:
@@ -19,9 +23,8 @@
 //    the number of timer interrupts that have to pass until the next sequence value is read.
 //  - Total number of interrupts of the sequence, used to determine which LED pattern to select.
 //  - Total number of individual LED pattern in the sequence.
-template <uint8_t L>
 struct led_show {
-  uint16_t patterns_and_breaks[L];
+  uint16_t patterns_and_breaks[17];
   uint16_t breaks_total;
   uint8_t pattern_length;
 };
@@ -48,40 +51,37 @@ const struct led_config LED_CONFIGS[12] = {
   {M3_PIN, M4_PIN, (1 << M3_PIN) | (1 << M4_PIN), (1 << M3_PIN)}    // D12: M3 -> M4
 };
 
-uint8_t INTERRUPTS = 0;       // No interrupt is triggered by default
+volatile uint8_t INTERRUPTS = 0;       // No interrupt is triggered by default
 
-uint8_t INTERRUPT_MASK = 0;   // No interrupt is enabled by default
+volatile uint8_t INTERRUPT_MASK = 0;   // No interrupt is enabled by default
 
-uint16_t TIMER_INTERRUPT_CNT = 0;
+volatile uint16_t TIMER_INTERRUPT_CNT = 0;
 
-uint8_t LED_SHOW_IDX = 0;
+volatile uint8_t LED_SHOW_IDX = 0;
 
-bool BTN_DOWN = false;
+volatile bool BTN_DOWN = false;
 
-uint16_t LED_PATTERN = 0;
-
-uint8_t LED_COUNT = 0;
+volatile uint8_t LED_COUNT = 0;
 
 uint8_t LEDS[12];
 
-const uint8_t LED_SHOW_COUNT = 4;
+const uint8_t LED_SHOW_COUNT = 5;
 
-const uint8_t LED_SHOW_LEN = 17;
-
-const struct led_show<LED_SHOW_LEN> LED_SHOWS[LED_SHOW_COUNT] PROGMEM = {
+const struct led_show LED_SHOWS[LED_SHOW_COUNT] PROGMEM = {
+  {{0xff11}, 1, 1}, // TODO: secret pattern
   {{0x0401, 0x0c01, 0x1801, 0x3001, 0x6001, 0x4001, 0x0002, 0x0011, 0x0031, 0x0061, 0x00c1, 0x0181, 0x0101, 0x0004, 0x8001, 0x0201, 0x0004}, 24, 17},
   {{0x4101, 0x6181, 0x71c1, 0x79e1, 0x7df8, 0x7df1, 0x3cf1, 0x1c71, 0x0c31, 0x0411, 0x0006, 0x8201, 0x0001, 0x8201, 0x0006}, 32, 16},
   {{0xd55f, 0x2aaf, 0xd55f, 0x2aaf, 0xd552, 0x2aa2, 0xd552, 0x2aa2, 0xd552, 0x2aa2, 0xd552, 0x2aa2}, 76, 12},
   {{0xfff1}, 1, 1}
 };
 
-inline void clear_leds() {
+void clear_leds() {
   // Assume LEDs are wired to physical pins PB0 -> PB3
   DDRB &= ~0x0f;
   PORTB &= ~0x0f;
 }
 
-inline void turn_on_led(uint8_t led) {
+void turn_on_led(uint8_t led) {
   clear_leds();
   DDRB |= LED_CONFIGS[led].pin_mask_out;
   PORTB |= LED_CONFIGS[led].port_mask_high;
@@ -108,26 +108,60 @@ void set_led_pattern(uint16_t pattern) {
   }
 }
 
-template <uint8_t L>
-void set_led_show(struct led_show<L>* show) {
-  uint16_t curr_int_cnt = TIMER_INTERRUPT_CNT % show->breaks_total;
-  for (uint8_t i = 0; i < show->pattern_length; i++) {
-    if (curr_int_cnt < (show->patterns_and_breaks[i] & 0xf)) {
-      set_led_pattern(show->patterns_and_breaks[i] >> 4);
+void set_led_show(uint8_t show_idx) {
+  uint16_t breaks_total = pgm_read_word(&LED_SHOWS[show_idx].breaks_total);
+  uint8_t len = pgm_read_byte(&LED_SHOWS[show_idx].pattern_length);
+  uint16_t curr_int_cnt = TIMER_INTERRUPT_CNT % breaks_total;
+  
+  for (uint8_t i = 0; i < len; i++) {
+    uint16_t val = pgm_read_word(&LED_SHOWS[show_idx].patterns_and_breaks[i]);
+    if (curr_int_cnt < (val & 0xf)) {
+      set_led_pattern(val >> 4);
       return;
     }
-    curr_int_cnt -= show->patterns_and_breaks[i] & 0xf;
+    curr_int_cnt -= val & 0xf;
   }
-  // If LED shows are correctly set, we should never end up here
-  set_led_pattern(show->patterns_and_breaks[show->pattern_length - 1] >> 4);
+
+  uint16_t last_val = pgm_read_word(&LED_SHOWS[show_idx].patterns_and_breaks[len - 1]);
+  set_led_pattern(last_val >> 4);
+}
+
+void game_blink_pattern(uint16_t pattern, uint8_t cycles) {
+  TIMER_INTERRUPT_CNT = 0;
+  while (TIMER_INTERRUPT_CNT < cycles) {
+    if (!((TIMER_INTERRUPT_CNT >> 1) & 1)) { 
+      set_led_pattern(pattern);
+    } else {
+      set_led_pattern(0x000);
+    }
+    commit_leds();
+    INTERRUPTS = 0;
+  }
+}
+
+uint16_t next_rand_led() {
+  uint8_t eeprom_seed = eeprom_read_byte((uint8_t*) EEPROM_SEED_ADDR);
+  uint32_t x = eeprom_seed;
+
+  // Algorithm "xor" from p. 4 of Marsaglia, "Xorshift RNGs"
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+
+  eeprom_write_byte((uint8_t*) EEPROM_SEED_ADDR, ++eeprom_seed);
+  return x % 12 != 5 ? (uint16_t) (x % 12) : 6;
 }
 
 ISR(PCINT0_vect) {
-  BTN_DOWN = !BTN_DOWN;
-  if (!BTN_DOWN) {
-    LED_SHOW_IDX = (LED_SHOW_IDX + 1) % LED_SHOW_COUNT;
+  if (!(PINB & (1 << BTN_PIN))) {
+    BTN_DOWN = true;
+  } else {
+    if (BTN_DOWN) {
+      LED_SHOW_IDX = (LED_SHOW_IDX + 1) % LED_SHOW_COUNT;
+    }
+    BTN_DOWN = false;
+    INTERRUPTS |= 1 << I_BTN;
   }
-  INTERRUPTS |= 1 << I_BTN;
 }
 
 ISR(TIM0_COMPA_vect) {
@@ -154,23 +188,25 @@ int main() {
 
   // Check if button is pressed on boot
   if (PINB & (1 << PINB4)) {
-    struct led_show<LED_SHOW_LEN> current_show;
-    uint8_t last_led_show_idx = 1;
+    bool ten_points_flag = eeprom_read_byte((uint8_t*) EEPROM_FLAG_ADDR) == 0x1;
+    uint8_t last_led_show_idx = 0xf;
 
     while (true) {
       if (last_led_show_idx != LED_SHOW_IDX) {
-        memcpy_P(&current_show, &LED_SHOWS[LED_SHOW_IDX], sizeof(struct led_show<LED_SHOW_LEN>));
+        if (!ten_points_flag && LED_SHOW_IDX == 0) {
+          LED_SHOW_IDX = 1;
+        }
         last_led_show_idx = LED_SHOW_IDX;
         // Reset timer interrupt counter to always start show from the beginning
         TIMER_INTERRUPT_CNT = 0;
       }
-      set_led_show<LED_SHOW_LEN>(&current_show);
+      set_led_show(LED_SHOW_IDX);
 
       commit_leds();
       INTERRUPTS = 0;
     }
   } else {
-    uint16_t target_pos = 8;  // TODO: change from hardcoded D9
+    uint16_t target_pos;
     uint16_t points = 0;
     bool lvl_won = false;
     bool game_lost = true;
@@ -178,25 +214,40 @@ int main() {
     while (true) {
       // Beginning animation
       if (game_lost) {
-        TIMER_INTERRUPT_CNT = 0;
-        while (TIMER_INTERRUPT_CNT < 12) {
-          if (!((TIMER_INTERRUPT_CNT / 2) % 2)) {
-            set_led_pattern(0xfff);
-          } else {
-            set_led_pattern(0x000);
-          }
+        // Disable button interrupt while anomations running
+        INTERRUPT_MASK &= ~(1 << I_BTN);
 
-          commit_leds();
-          INTERRUPTS = 0;
+        for (uint8_t i = 0; i < 2; i++) {
+          TIMER_INTERRUPT_CNT = 0;
+          uint16_t end_pattern = 0;
+          while (TIMER_INTERRUPT_CNT < 10) {
+            if (TIMER_INTERRUPT_CNT < 5) {
+              end_pattern |= (1 << TIMER_INTERRUPT_CNT) | (1 << (TIMER_INTERRUPT_CNT + 6));
+            } else {
+              end_pattern &= ~((1 << (TIMER_INTERRUPT_CNT - 5)) | (1 << (TIMER_INTERRUPT_CNT + 1)));
+            }
+
+            set_led_pattern(end_pattern);
+
+            commit_leds();
+            INTERRUPTS = 0;
+          }
+          _delay_ms(100);
         }
+        _delay_ms(200);
+
         game_lost = false;
+        INTERRUPT_MASK |= 1 << I_BTN;
       }
+
+      target_pos = next_rand_led();
 
       TIMER_INTERRUPT_CNT = 0;
 
       // Game loop
       while (!lvl_won && !game_lost) {
-        uint16_t player_pos_raw = (TIMER_INTERRUPT_CNT / 2) % 22;
+        // If the player has more than 5 points, increase game speed
+        uint16_t player_pos_raw = (TIMER_INTERRUPT_CNT / (points < 5 ? 3 : 2)) % 22;
         uint16_t player_pos;
 
         if (player_pos_raw <= 4) {
@@ -207,7 +258,7 @@ int main() {
         } else if (player_pos_raw <= 10) {
           player_pos = 16 - player_pos_raw;
         } else if (player_pos_raw == 11) {
-          TIMER_INTERRUPT_CNT += 4;  // TODO: change to 4
+          TIMER_INTERRUPT_CNT += 4;
           continue;
         } 
         else if (player_pos_raw <= 16) {
@@ -238,66 +289,27 @@ int main() {
       // Blink target when hit
       TIMER_INTERRUPT_CNT = 0;
       if (lvl_won) {
-        while (TIMER_INTERRUPT_CNT < 6) {
-          if (!(TIMER_INTERRUPT_CNT % 2)) {
-            set_led_pattern(1 << target_pos);
-          } else {
-            set_led_pattern(0x000);
-          }
-
-          commit_leds();
-          INTERRUPTS = 0;
-        }
+        game_blink_pattern(1 << target_pos, 6);
       } else {
         // Disable button interrupt while anomations running
         INTERRUPT_MASK &= ~(1 << I_BTN);
 
         // Run end anomation before displaying points count
-        for (uint8_t i = 0; i < 2; i++) {
-          TIMER_INTERRUPT_CNT = 0;
-          uint16_t end_pattern = 0;
-          while (TIMER_INTERRUPT_CNT < 10) {
-            if (TIMER_INTERRUPT_CNT < 5) {
-              end_pattern |= (1 << TIMER_INTERRUPT_CNT) | (1 << (TIMER_INTERRUPT_CNT + 6));
-            } else {
-              end_pattern &= ~((1 << (TIMER_INTERRUPT_CNT - 5)) | (1 << (TIMER_INTERRUPT_CNT + 1)));
-            }
+        game_blink_pattern(0x7df, 12);
+        _delay_ms(500);
 
-            set_led_pattern(end_pattern);
-
-            commit_leds();
-            INTERRUPTS = 0;
-          }
-          _delay_ms(50);
+        // Set flag if user reached at least 10 points
+        if (points >= 10) {
+          eeprom_write_byte((uint8_t*) EEPROM_FLAG_ADDR, 0x1);
         }
 
         // Display points count using D6 and D12
         while (points) {
           if (points / 10) {
-            TIMER_INTERRUPT_CNT = 0;
-            while (TIMER_INTERRUPT_CNT < 4) {
-              if (!((TIMER_INTERRUPT_CNT / 2) % 2)) {
-                set_led_pattern(0x020);
-              } else {
-                set_led_pattern(0x000);
-              }
-
-              commit_leds();
-              INTERRUPTS = 0;
-            }
+            game_blink_pattern(0x020, 4);
             points -= 10;
           } else {
-            TIMER_INTERRUPT_CNT = 0;
-            while (TIMER_INTERRUPT_CNT < 4) {
-              if (!((TIMER_INTERRUPT_CNT / 2) % 2)) {
-                set_led_pattern(0x800);
-              } else {
-                set_led_pattern(0x000);
-              }
-
-              commit_leds();
-              INTERRUPTS = 0;
-            }
+            game_blink_pattern(0x800, 4);
             points -= 1;
           }
         }
