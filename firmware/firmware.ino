@@ -145,7 +145,7 @@ void game_blink_pattern(uint16_t pattern, uint8_t cycles) {
 uint16_t next_rand_led() {
   uint16_t state = eeprom_read_word((uint16_t*) EEPROM_RAND_ADDR);
   // Linear congruential generator as PRNG
-	state = (state * 28165 + 1133) & 0xffff;
+  state = (state * 28165 + 1133) & 0xffff;
   eeprom_write_word((uint16_t*) EEPROM_RAND_ADDR, state);
   uint16_t res = state % 12;
   return res != 5 && res != 11 ? res % 12 : res % 12 - 1;
